@@ -55,6 +55,7 @@ kayfa_agent = Agent(
 
 @kayfa_agent.tool_plain
 def search_knowledge_base(query: str, top_k: int = 4) -> str:
+    """Search Kayfa's knowledge base using semantic vector search for courses, policies, and curriculum."""
     results = perform_vector_search(query, top_k=top_k)
     if not results:
         return "NO_RESULTS_FOUND"
@@ -62,26 +63,31 @@ def search_knowledge_base(query: str, top_k: int = 4) -> str:
 
 @kayfa_agent.tool_plain
 def get_courses_by_track(track: str, level: str = None) -> str:
+    """Get courses filtered by track name (e.g., SOC, Data Science) and optional level."""
     results = search_courses_by_track(track, level)
     return json.dumps(results, ensure_ascii=False) if results else "NO_COURSES_FOUND"
 
 @kayfa_agent.tool_plain
 def get_courses_by_keyword(keyword: str) -> str:
+    """Search courses by keyword in name or description."""
     results = search_courses_by_keyword(keyword)
     return json.dumps(results, ensure_ascii=False) if results else "NO_COURSES_FOUND"
 
 @kayfa_agent.tool_plain
 def get_roadmap_details_tool(roadmap_name: str) -> str:
+    """Get full diploma details including duration, skills, tools, and course list."""
     details = get_roadmap_details(roadmap_name)
     return json.dumps(details, ensure_ascii=False) if details else "ROADMAP_NOT_FOUND"
 
 @kayfa_agent.tool_plain
 def list_all_diplomas_tool() -> str:
+    """List all available diplomas with duration and course count."""
     diplomas = list_all_diplomas()
     return json.dumps(diplomas, ensure_ascii=False)
 
 @kayfa_agent.tool
 async def capture_lead(ctx: RunContext[RAGDeps], ticket: CRMTicket) -> str:
+    """Save a qualified lead to MongoDB after validating phone number."""
     is_valid, cleaned_phone = validate_phone_number(ticket.phone)
     if not is_valid:
         return "PHONE_VALIDATION_FAILED"
