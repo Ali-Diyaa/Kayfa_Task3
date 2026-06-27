@@ -20,21 +20,34 @@ def inject_global_css(is_authenticated: bool):
                 max-width: 450px !important;
                 margin-left: auto !important;
                 margin-right: auto !important;
-                padding-top: 20px !important;
+                padding-top: 0px !important;
                 padding-bottom: 5vh !important;
             }
 
-            .top-logo-container {
+            /* Remove all default Streamlit image/container spacing */
+            .main .block-container > div > div > div {
+                padding-top: 0 !important;
+            }
+            [data-testid="stImage"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            [data-testid="stVerticalBlock"]:first-child {
+                gap: 0px !important;
+            }
+
+            .login-logo-wrap {
                 text-align: center;
-                margin-bottom: 30px;
+                padding: 48px 0 0 0;
+                margin: 0;
                 animation: fadeInDown 0.8s ease-out;
             }
-            .top-logo-container img {
-                width: 140px;
-                filter: drop-shadow(0 10px 15px rgba(99, 102, 241, 0.15));
+            .login-logo-wrap img {
+                width: 180px;
+                filter: drop-shadow(0 12px 20px rgba(99, 102, 241, 0.18));
                 transition: transform 0.3s ease;
             }
-            .top-logo-container img:hover { transform: scale(1.05); }
+            .login-logo-wrap img:hover { transform: scale(1.06); }
 
             @keyframes fadeInDown {
                 from { opacity: 0; transform: translateY(-20px); }
@@ -164,12 +177,28 @@ def _login_screen():
         st.session_state.auth_tab = "login"
 
     with st.container():
+        # ── Centered, bigger logo via HTML (no st.image = no white bar) ──
         try:
-            st.image("assets/kayfa_logo.png", width=140)
-        except:
-            st.markdown("<h1 style='text-align:center;font-size:4rem;margin-bottom:0;'>🏢</h1>", unsafe_allow_html=True)
+            import base64
+            from pathlib import Path
+            logo_path = Path("assets/kayfa_logo.png")
+            if logo_path.exists():
+                logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
+                st.markdown(f'''
+                <div class="login-logo-wrap">
+                    <img src="data:image/png;base64,{logo_b64}" alt="Kayfa Logo">
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                raise FileNotFoundError
+        except Exception:
+            st.markdown('''
+            <div class="login-logo-wrap">
+                <span style="font-size:4rem;">🏢</span>
+            </div>
+            ''', unsafe_allow_html=True)
 
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        #st.markdown('<div class="login-card">', unsafe_allow_html=True)
         st.markdown("""
             <h1 class="login-title">Welcome Back</h1>
             <p class="login-subtitle">Sign in to your Kayfa AI Console</p>
@@ -240,7 +269,6 @@ def main():
 
     # ── 1. Initialize current page if not set ──
     if "current_page" not in st.session_state:
-        # Admins land on CRM, regular users land on Chat
         st.session_state.current_page = "crm" if is_admin else "chat"
 
     # ── 2. Build Custom Sidebar (Branding + Navigation) ──
@@ -252,9 +280,8 @@ def main():
         st.caption("Sales Agent Console")
         st.divider()
 
-        # Navigation — Chat is only for non-admin users
         nav_items = [
-            ("💬 Chat", "chat", False, not is_admin),   # hidden for admin
+            ("💬 Chat", "chat", False, not is_admin),
             ("🎯 CRM Leads", "crm", True, True),
             ("📊 Cost Analytics", "cost_tracking", True, True),
             ("🔍 Agent Traces", "agent_steps", True, True),
@@ -294,12 +321,10 @@ def main():
 
     target_page = st.session_state.current_page
 
-    # Safety: if admin somehow has "chat" as current_page, redirect to CRM
     if is_admin and target_page == "chat":
         st.session_state.current_page = "crm"
         st.rerun()
 
-    # CRM and analytics pages are admin-only
     admin_pages = {"crm", "cost_tracking", "agent_steps", "comparison"}
     if target_page in admin_pages and not is_admin:
         st.error("This page is available for admins only.")
