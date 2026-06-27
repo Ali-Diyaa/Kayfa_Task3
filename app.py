@@ -1,4 +1,6 @@
 import streamlit as st
+import base64
+from pathlib import Path
 from core.auth import login_user, register_user
 from core.db import ensure_indexes
 from views import page_chat, page_crm, page_cost_tracking, page_agent_steps, page_comparison
@@ -179,8 +181,6 @@ def _login_screen():
     with st.container():
         # ── Centered, bigger logo via HTML (no st.image = no white bar) ──
         try:
-            import base64
-            from pathlib import Path
             logo_path = Path("assets/kayfa_logo.png")
             if logo_path.exists():
                 logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
@@ -198,7 +198,6 @@ def _login_screen():
             </div>
             ''', unsafe_allow_html=True)
 
-        #st.markdown('<div class="login-card">', unsafe_allow_html=True)
         st.markdown("""
             <h1 class="login-title">Welcome Back</h1>
             <p class="login-subtitle">Sign in to your Kayfa AI Console</p>
@@ -247,7 +246,59 @@ def _login_screen():
                     st.error(msg)
 
         st.markdown('<div class="login-footer">© 2024 Kayfa Digital Solutions. All rights reserved.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─── Model Preloader Screen ─────────────────────────────────────────
+def _preload_models():
+    """
+    Shows a beautiful full-screen loader while downloading/initializing 
+    the sentence-transformer weights and FAISS index into memory.
+    """
+    logo_path = Path("assets/kayfa_logo.png")
+    logo_b64 = ""
+    if logo_path.exists():
+        logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
+
+    st.markdown(f"""
+    <style>
+        .loader-overlay {{
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 9999;
+            font-family: 'Inter', 'Cairo', system-ui, sans-serif;
+        }}
+        .loader-logo {{ width: 100px; margin-bottom: 32px; animation: pulse 2s infinite; }}
+        .loader-text {{ font-size: 20px; font-weight: 700; color: #334155; margin-bottom: 10px; }}
+        .loader-sub {{ font-size: 14px; color: #94a3b8; margin-bottom: 30px; }}
+        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+        @keyframes pulse {{ 0%, 100% {{ transform: scale(1); }} 50% {{ transform: scale(1.05); }} }}
+        .spinner {{
+            width: 44px; height: 44px; border: 4px solid #e2e8f0;
+            border-top-color: #6366f1; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 24px;
+        }}
+    </style>
+    <div class="loader-overlay">
+        {"<img src='data:image/png;base64," + logo_b64 + "' class='loader-logo' alt='Logo'>" if logo_b64 else "<div style='font-size:4rem; margin-bottom:32px;'>🏢</div>"}
+        <div class="spinner"></div>
+        <div class="loader-text">Preparing Your AI Assistant</div>
+        <div class="loader-sub">Loading embedding models & knowledge base...<br>This only happens once per session.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Trigger the actual loading (handled by st.cache_resource in knowledge_base.py)
+    from core.knowledge_base import get_embedder, get_faiss_data
+    
+    # Load Embedding Model
+    get_embedder()
+    
+    # Load FAISS Index & Metadata
+    get_faiss_data()
+
+    # Mark as loaded and rerun to clear the overlay and draw the main app
+    st.session_state.models_loaded = True
+    st.rerun()
 
 
 # ─── Main ───────────────────────────────────────────────────────────
@@ -265,10 +316,16 @@ def main():
         _login_screen()
         return
 
+    # ── Preload AI Models into memory if this is the first run post-login ──
+    if not st.session_state.get("models_loaded"):
+        _preload_models()
+        return  # Rerun happens inside _preload_models
+
     is_admin = st.session_state.role == "admin"
 
     # ── 1. Initialize current page if not set ──
     if "current_page" not in st.session_state:
+        # Admins land on CRM, regular users land on Chat
         st.session_state.current_page = "crm" if is_admin else "chat"
 
     # ── 2. Build Custom Sidebar (Branding + Navigation) ──
@@ -280,8 +337,9 @@ def main():
         st.caption("Sales Agent Console")
         st.divider()
 
+        # Navigation — Chat is only for non-admin users
         nav_items = [
-            ("💬 Chat", "chat", False, not is_admin),
+            ("💬 Chat", "chat", False, not is_admin),   # hidden for admin
             ("🎯 CRM Leads", "crm", True, True),
             ("📊 Cost Analytics", "cost_tracking", True, True),
             ("🔍 Agent Traces", "agent_steps", True, True),
@@ -305,7 +363,8 @@ def main():
             for key in [
                 "authenticated", "username", "role", "messages",
                 "active_chat_id", "edit_mode", "pending_prompt",
-                "auth_tab", "current_page", "bench_running", "bench_errors"
+                "auth_tab", "current_page", "bench_running", "bench_errors",
+                "models_loaded"  # Clear model flag so they reload on next login
             ]:
                 st.session_state.pop(key, None)
             st.rerun()
@@ -321,10 +380,12 @@ def main():
 
     target_page = st.session_state.current_page
 
+    # Safety: if admin somehow has "chat" as current_page, redirect to CRM
     if is_admin and target_page == "chat":
         st.session_state.current_page = "crm"
         st.rerun()
 
+    # CRM and analytics pages are admin-only
     admin_pages = {"crm", "cost_tracking", "agent_steps", "comparison"}
     if target_page in admin_pages and not is_admin:
         st.error("This page is available for admins only.")

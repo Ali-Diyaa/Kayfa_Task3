@@ -1,5 +1,5 @@
 streamlit==1.39.0
-pydantic==2.9.2
+pydantic>=2.10
 pydantic-ai==0.0.13
 pymongo==4.8.0
 faiss-cpu>=1.12.0
