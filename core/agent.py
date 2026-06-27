@@ -40,6 +40,13 @@ class PhoneValidationResult(TypedDict):
     normalized: str | None   # always E.164 format: +[country_code][number]
     error: str | None
 
+# ════════════════════════════════════════════════════
+# PER-REQUEST TOOL DEDUPLICATION CACHE
+# ════════════════════════════════════════════════════
+_TOOL_CACHE: dict[str, str] = {}
+
+def clear_tool_cache():
+    _TOOL_CACHE.clear()
 # ════════════════════════════════════════════════════════════════
 # PRICING CONFIG
 # ════════════════════════════════════════════════════════════════
@@ -448,6 +455,13 @@ You are Kayfa AI Sales Agent for Kayfa Digital Solutions.
 - If the user provides both name and phone/WhatsApp, immediately call capture_lead.
 - For pricing questions (e.g. "price", "how much", "بكام", "سعرها"), resolve references from conversation context and call get_exact_pricing without asking for clarification.
 
+=== ANTI-LOOP RULES (CRITICAL) ===
+- NEVER call the same tool with the same or similar arguments more than once.
+- NEVER generate free-form text before calling tools. Call tools IMMEDIATELY.
+- If a tool returns a result, ACCEPT it as final. Do NOT retry with alternative phrasings.
+- If a tool returns "NOT_FOUND", "NO_RESULTS", "NO_COURSES_FOUND", do NOT retry with different wording.
+- Never call search_knowledge_base AND a structured tool for the exact same topic in the same turn.
+
 === LANGUAGE ===
 - Reply in the user's language.
 - If Arabic, match the user's dialect when possible.
@@ -472,14 +486,6 @@ kayfa_agent = Agent(
     retries=2,
 )
 
-
-
-kayfa_agent = Agent(
-    model=GROQ_MODEL,
-    deps_type=RAGDeps,
-    model_settings={"temperature": 0.2, "max_tokens": 800}, 
-    retries=2,
-)
 
 @kayfa_agent.system_prompt
 def build_system_prompt(ctx: RunContext[RAGDeps]) -> str:
@@ -513,6 +519,9 @@ def build_system_prompt(ctx: RunContext[RAGDeps]) -> str:
 @kayfa_agent.tool_plain
 def search_knowledge_base(query: str) -> str:
     """Search Kayfa knowledge base and catalogs."""
+    ck = f"skb||{query.lower().strip()}"
+    if ck in _TOOL_CACHE:
+        return _TOOL_CACHE[ck]
     results = []
     
     # 1. Structured search in ROADMAPS
@@ -536,7 +545,9 @@ def search_knowledge_base(query: str) -> str:
             "text": r["text"][:500]
         })
     
-    return json.dumps(results, ensure_ascii=False, indent=2) if results else "NO_RESULTS"
+    out =  json.dumps(results, ensure_ascii=False, indent=2) if results else "NO_RESULTS"
+    _TOOL_CACHE[ck] = out
+    return out
 
 # ─── TOOL 2: Structured Course Search ───
 @kayfa_agent.tool_plain
@@ -602,17 +613,25 @@ def get_exact_pricing(item_name: str) -> str:
     Get EXACT pricing for any diploma, track, or course.
     ALWAYS use this when user asks about price, cost, 'بكام', 'سعر', 'how much'.
     """
-    result = cached_find_pricing(item_name)                     # ← CHANGED (was: find_pricing)
+    ck = f"gep||{item_name.lower().strip()}"
+    if ck in _TOOL_CACHE:
+        return _TOOL_CACHE[ck]
+
+    result = cached_find_pricing(item_name)
 
     if not result["found"]:
-        db = cached_get_pricing_database()                      # ← CHANGED (was: get_pricing_database)
+        db = cached_get_pricing_database()
         prices = {v["name"]: f"${v['price']}" for v in db["tracks"].values()}
-        return json.dumps({"found": False, "available_tracks": prices}, ensure_ascii=False)
+        out = json.dumps({"found": False, "available_tracks": prices}, ensure_ascii=False)
+        _TOOL_CACHE[ck] = out
+        return out                                         
 
     if result["type"] == "free":
-        return json.dumps({"name": result["name"], "price": "مجاناً", "price_usd": 0}, ensure_ascii=False)
+        out = json.dumps({"name": result["name"], "price": "مجاناً", "price_usd": 0}, ensure_ascii=False)
+        _TOOL_CACHE[ck] = out
+        return out                                         
 
-    return json.dumps({
+    out = json.dumps({
         "name": result["name"],
         "price": f"${result['price']}",
         "price_usd": result["price"],
@@ -621,6 +640,8 @@ def get_exact_pricing(item_name: str) -> str:
         "hours": result.get("hours"),
         "courses": result.get("courses")
     }, ensure_ascii=False)
+    _TOOL_CACHE[ck] = out
+    return out                                             
 
 # ════════════════════════════════════════════════════════════════
 # PHONE VALIDATION
@@ -778,6 +799,7 @@ async def ask_kayfa(
     chat_id: str | None = None,
     user_id: str | None = None,
 ) -> str:
+    clear_tool_cache()
     intent  = detect_intent(question)
     dialect = detect_dialect(question)
     lang    = "ar" if re.search(r'[\u0600-\u06FF]', question) else "en"
