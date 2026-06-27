@@ -3,6 +3,7 @@ PAGE — Agent Trace Viewer for Admin.
 Step-by-step execution traces matching notebook print_trace detail level.
 """
 import json
+import re
 import html as html_lib
 import streamlit as st
 import streamlit.components.v1 as components
@@ -27,11 +28,64 @@ def _esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _build_md_table(match):
+    """Converts a regex-matched markdown table block into HTML table."""
+    md_text = match.group(0)
+    rows = [r.strip() for r in md_text.strip().split('\n') if r.strip()]
+    if len(rows) < 2:
+        return md_text
+
+    html = '<div style="overflow-x:auto;margin:10px 0;border-radius:8px;border:1px solid #334155;"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:\'Cairo\',sans-serif;">'
+    
+    # Header
+    headers = [h.strip() for h in rows[0].split('|') if h.strip()]
+    html += '<thead><tr>' + ''.join(f'<th style="border:1px solid #334155;padding:8px 12px;background:#1e293b;color:#f1f5f9;text-align:right;font-weight:700;">{h}</th>' for h in headers) + '</tr></thead>'
+    
+    # Body
+    html += '<tbody>'
+    for row in rows[1:]:
+        if re.match(r'^[\s\-\|:]+$', row):  # Skip separator row |---|---|
+            continue
+        cols = [c.strip() for c in row.split('|') if c.strip()]
+        html += '<tr>' + ''.join(f'<td style="border:1px solid #334155;padding:8px 12px;color:#cbd5e1;text-align:right;">{c}</td>' for c in cols) + '</tr>'
+    html += '</tbody></table></div>'
+    return html
+
+
+def _format_agent_text(content: str) -> str:
+    """Formats agent text by converting markdown tables, bold, and breaks to clean HTML."""
+    # 1. Escape HTML for safety
+    safe = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # 2. Convert literal &lt;br&gt; and \n to proper HTML breaks
+    safe = safe.replace("&lt;br&gt;", "<br>")
+    safe = safe.replace("\n", "<br>")
+    
+    # 3. Convert Bold markdown **text** to <strong>text</strong>
+    safe = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color:#f8fafc;font-weight:700;">\1</strong>', safe)
+    
+    # 4. Convert Markdown Tables to HTML Tables
+    # Match blocks starting and ending with | that may contain <br>
+    safe = re.sub(
+        r'(?:<br>)?\|.*?\|(?:<br>\|.*?\|)+(?:<br>)?',
+        lambda m: _build_md_table(m).replace("<br>", "\n"),
+        safe
+    )
+    
+    # 5. Clean up excessive <br> tags around tables
+    safe = re.sub(r'(<table)', r'<br><table', safe)
+    safe = re.sub(r'(</div>)<br>', r'\1', safe)
+    
+    # 6. Bullet points styling
+    safe = safe.replace("• ", '<span style="color:#6366f1;font-weight:700;margin-left:5px;">•</span> ')
+    
+    return safe
+
+
 def _render_trace_steps(trace: list) -> str:
     """
     Render each ModelResponse as a numbered step.
     Each step shows: tool calls + args → tool result → text/thought — all in ONE card.
-    Matches the notebook print_trace output format.
     """
     if not trace:
         return '<div style="text-align:center;padding:32px;color:#64748b;">No trace data available.</div>'
@@ -57,10 +111,7 @@ def _render_trace_steps(trace: list) -> str:
             title_bg = "rgba(99,102,241,0.08)"
             title_color = "#a5b4fc"
             title_border = "rgba(99,102,241,0.15)"
-            if is_parallel:
-                step_label = f"⚡ Step {step_num} — Parallel Tools + Final Answer"
-            else:
-                step_label = f"💬 Step {step_num} — Final Answer"
+            step_label = f"⚡ Step {step_num} — Parallel Tools + Final Answer" if is_parallel else f"💬 Step {step_num} — Final Answer"
         elif is_parallel:
             dot_bg = "linear-gradient(135deg,#ec4899,#db2777)"
             dot_emoji = "⚡"
@@ -114,7 +165,7 @@ def _render_trace_steps(trace: list) -> str:
                     </div>
                 </div>''')
 
-        # Tool result — always show with the step that called it
+        # Tool result
         if tool_result is not None:
             res = _esc(_safe_json(tool_result, 500))
             inner_parts.append(f'''
@@ -135,18 +186,17 @@ def _render_trace_steps(trace: list) -> str:
                 continue
 
             if is_answer:
-                safe = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                safe = safe.replace("\n", "<br>")
-                safe = safe.replace("• ", '<span style="color:#6366f1;font-weight:700;">•</span> ')
+                safe = _format_agent_text(content)
                 inner_parts.append(f'''
                 <div style="color:#e2e8f0;font-size:14px;line-height:2;direction:rtl;font-family:'Cairo','Inter',sans-serif;">
                     {safe}
                 </div>''')
             else:
-                safe = content[:500].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                # Reasoning text: formatted with a subtle background to separate paragraphs
+                safe = _format_agent_text(content)
                 inner_parts.append(f'''
-                <div style="color:#c4b5fd;font-size:12px;line-height:1.7;font-style:italic;">
-                    💬 {safe}
+                <div style="color:#c4b5fd;font-size:12px;line-height:1.8;font-style:italic;background:rgba(139,92,246,0.05);padding:12px;border-radius:8px;border-right:3px solid #8b5cf6;margin-bottom:10px;">
+                    {safe}
                 </div>''')
 
         inner = ''.join(inner_parts)
@@ -234,6 +284,7 @@ def _build_full_html(logs: list) -> str:
         div[style*="overflow-y:auto"]::-webkit-scrollbar {{ width:4px; }}
         div[style*="overflow-y:auto"]::-webkit-scrollbar-thumb {{ background:#334155; border-radius:99px; }}
         div[style*="overflow-y:auto"]::-webkit-scrollbar-track {{ background:transparent; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
     </style>
 </head>
 <body>{cards}</body>
@@ -304,4 +355,4 @@ def show():
 
     full_html = _build_full_html(filtered[:show_count])
     est_height = min(len(filtered[:show_count]) * 650, 8000)
-    components.html(full_html, height=est_height, scrolling=True)   
+    components.html(full_html, height=est_height, scrolling=True)
