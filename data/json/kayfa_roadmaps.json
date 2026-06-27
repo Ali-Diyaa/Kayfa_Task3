@@ -549,5 +549,24 @@
       "kayfa_live_session_soc",
       "kayfa_ds_career_development"
     ]
+  },
+  {
+    "id": "kayfa_fullstack_diploma",
+    "name": "Fullstack Development Diploma",
+    "summary": "A 6-month project-first program covering frontend (HTML/CSS/JS/React/Next.js) and backend (Node.js/Express/MongoDB/MySQL). 55 live sessions, 7 portfolio projects, personal subdomain, CV guidance. No prior coding required.",
+    "provider": "kayfa",
+    "host": "kayfa",
+    "track": ["web_development", "fullstack"],
+    "skills": [
+      "HTML5", "CSS3", "JavaScript", "TypeScript", "React", "Next.js",
+      "Redux Toolkit", "React Query", "Node.js", "Express.js", "REST APIs",
+      "MongoDB", "MySQL", "JWT Auth", "Docker", "Deployment", "Business English",
+      "CV Writing", "Interview Preparation"
+    ],
+    "tools": ["React", "Next.js", "Node.js", "Express", "MongoDB", "MySQL", "Docker"],
+    "duration": "6 months",
+    "courses_count": 55,
+    "link": "https://kayfa.io/fullstack-diploma",
+    "courses_list": []
   }
 ]

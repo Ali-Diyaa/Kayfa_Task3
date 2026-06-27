@@ -1,11 +1,16 @@
+"""
+Knowledge base — FAISS vector search + structured course/roadmap lookups.
+Embedding model and FAISS index are cached via st.cache_resource
+so they load ONCE per process, not on every Streamlit rerun.
+"""
 import os
 import json
 import pickle
+import streamlit as st
 from pathlib import Path
 from typing import List, Optional, Any
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 # Paths
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -13,7 +18,8 @@ _FAISS_INDEX_PATH = DATA_DIR / "faiss_index.bin"
 _FAISS_META_PATH = DATA_DIR / "faiss_metadata.pkl"
 _JSON_DIR = DATA_DIR / "json"
 
-# Load data
+
+# ── JSON Data (fast, no caching needed) ────────────────────────────
 def load_json_data(filepath: str) -> Any:
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -21,38 +27,56 @@ def load_json_data(filepath: str) -> Any:
 COURSES = load_json_data(str(_JSON_DIR / "kayfa_courses.json"))
 ROADMAPS = load_json_data(str(_JSON_DIR / "kayfa_roadmaps.json"))
 
-# Embedding model
-_EMBED_MODEL_NAME = "BAAI/bge-m3"
-_embedder = SentenceTransformer(_EMBED_MODEL_NAME)
 
-# FAISS
-faiss_index = None
-faiss_metadata: List[dict] = []
+# ════════════════════════════════════════════════════════════════
+# CACHED: Embedding Model — loads ONCE per Streamlit process
+# Without this, 391MB of weights reload on every rerun
+# ════════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner=False)
+def get_embedder():
+    """Load the sentence-transformer model once and cache it."""
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer("BAAI/bge-m3")
+    print("✅ Embedding model loaded & cached")
+    return model
 
-def load_faiss_index():
-    """Load the FAISS index and metadata from disk"""
-    global faiss_index, faiss_metadata
-    if _FAISS_INDEX_PATH.exists() and _FAISS_META_PATH.exists():
-        faiss_index = faiss.read_index(str(_FAISS_INDEX_PATH))
-        with open(_FAISS_META_PATH, "rb") as f:
-            faiss_metadata = pickle.load(f)
-        print(f"✓ Loaded FAISS index with {faiss_index.ntotal} vectors.")
-    else:
-        faiss_index = None
-        faiss_metadata = []
-        print("⚠️ No FAISS index found.")
 
-def perform_vector_search(query: str, top_k: int = 3, source_filter: Optional[str] = None) -> List[dict]:
-    global faiss_index, faiss_metadata
+# ════════════════════════════════════════════════════════════════
+# CACHED: FAISS Index + Metadata — loads ONCE per Streamlit process
+# Without this, 160 vectors re-deserialize from disk on every rerun
+# ════════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner=False)
+def get_faiss_data():
+    """
+    Load FAISS index and metadata into memory, cached for the
+    lifetime of the Streamlit process.
+    Returns (index, metadata_list) or (None, []).
+    """
+    if not _FAISS_INDEX_PATH.exists() or not _FAISS_META_PATH.exists():
+        print("⚠️ No FAISS index found — run the ingestion script first.")
+        return None, []
 
-    if faiss_index is None:
-        load_faiss_index()
-        if faiss_index is None or faiss_index.ntotal == 0:
-            print("⚠ FAISS index is empty - run ingest_md_files_faiss first")
-            return []
+    index = faiss.read_index(str(_FAISS_INDEX_PATH))
+    with open(_FAISS_META_PATH, "rb") as f:
+        metadata = pickle.load(f)
+
+    print(f"✅ FAISS index loaded & cached ({index.ntotal} vectors)")
+    return index, metadata
+
+
+# ════════════════════════════════════════════════════════════════
+# Vector Search — uses cached embedder + cached FAISS
+# ════════════════════════════════════════════════════════════════
+def perform_vector_search(query: str, top_k: int = 3,
+                          source_filter: Optional[str] = None) -> List[dict]:
+    faiss_index, faiss_metadata = get_faiss_data()
+
+    if faiss_index is None or faiss_index.ntotal == 0:
+        return []
 
     try:
-        q_emb = _embedder.encode([query], normalize_embeddings=True).astype('float32')
+        embedder = get_embedder()
+        q_emb = embedder.encode([query], normalize_embeddings=True).astype('float32')
         k_to_retrieve = top_k * 5 if source_filter else top_k
 
         distances, indices = faiss_index.search(q_emb, k_to_retrieve)
@@ -65,7 +89,7 @@ def perform_vector_search(query: str, top_k: int = 3, source_filter: Optional[st
 
             if source_filter:
                 if source_filter in ["courses_json", "roadmaps_json"]:
-                    if meta['source']!= source_filter:
+                    if meta['source'] != source_filter:
                         continue
                 elif source_filter not in meta['source']:
                     continue
@@ -89,6 +113,7 @@ def perform_vector_search(query: str, top_k: int = 3, source_filter: Optional[st
         traceback.print_exc()
         return []
 
+
 def build_context_from_results(results: List[dict]) -> str:
     if not results:
         return "NO_RESULTS"
@@ -101,6 +126,10 @@ def build_context_from_results(results: List[dict]) -> str:
 
     return "\n\n---\n\n".join(parts)
 
+
+# ════════════════════════════════════════════════════════════════
+# Structured Lookups (in-memory JSON, no caching needed)
+# ════════════════════════════════════════════════════════════════
 def search_courses_by_track(track: str, level: Optional[str] = None) -> List[dict]:
     results = []
     track_lower = track.lower()
@@ -117,6 +146,7 @@ def search_courses_by_track(track: str, level: Optional[str] = None) -> List[dic
                 })
     return results
 
+
 def search_courses_by_keyword(keyword: str) -> List[dict]:
     kw = keyword.lower()
     results = []
@@ -131,6 +161,7 @@ def search_courses_by_keyword(keyword: str) -> List[dict]:
                 "link": c.get("link", "")
             })
     return results
+
 
 def get_roadmap_details(roadmap_name: str) -> Optional[dict]:
     name_lower = roadmap_name.lower()
@@ -155,6 +186,7 @@ def get_roadmap_details(roadmap_name: str) -> Optional[dict]:
             }
     return None
 
+
 def list_all_diplomas() -> List[dict]:
     return [
         {
@@ -165,14 +197,13 @@ def list_all_diplomas() -> List[dict]:
             "link": d.get("link", "")
         }
         for d in ROADMAPS
-        if "diploma" in d["id"].lower() or "bootcamp" in d["id"].lower() 
+        if "diploma" in d["id"].lower() or "bootcamp" in d["id"].lower()
         or "diploma" in d["name"].lower()
     ]
+
+
 def get_price(product_name: str) -> Optional[str]:
     for course in COURSES:
         if product_name.lower() in course["name"].lower():
             return course.get("price", "Contact for pricing")
     return None
-
-# Load on import
-load_faiss_index()
